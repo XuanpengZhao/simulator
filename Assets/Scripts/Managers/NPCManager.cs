@@ -4,7 +4,7 @@
  * This software contains code licensed as described in LICENSE.
  *
  */
-
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Simulator.Map;
@@ -17,6 +17,11 @@ using Simulator.Network.Core.Messaging;
 using Simulator.Network.Core.Messaging.Data;
 using Simulator.Network.Shared;
 using Simulator.Network.Shared.Messages;
+using System.Net.Sockets;
+using System.Threading;
+using System.Text;
+using System.Collections.Generic;
+using Random = UnityEngine.Random;
 
 public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
 {
@@ -80,6 +85,8 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
     public bool NPCActive { get; set; } = false;
     [HideInInspector]
     public List<NPCController> CurrentPooledNPCs = new List<NPCController>();
+    public List<NPCController> CurrentSUMOPPooledNPCs = new List<NPCController>(); // XZ
+    public string recv_text_public; // XZ
     private LayerMask NPCSpawnCheckBitmask;
     private Vector3 SpawnBoundsSize;
     private bool DebugSpawnArea = false;
@@ -93,6 +100,15 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
 
     private Camera SimulatorCamera;
     private MapManager MapManager;
+
+    private string IP = "127.0.0.1";
+    private int portLocal = 8000;
+    private int portRemote = 8001;
+    private Socket client;
+    private IPEndPoint remoteEndPoint;
+    private EndPoint Remote;
+
+
 
     public delegate void DespawnCallbackType(NPCController controller);
     List<DespawnCallbackType> DespawnCallbacks = new List<DespawnCallbackType>();
@@ -124,6 +140,7 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
 
     private void Start()
     {
+        SUMOInit();
         MapOrigin = MapOrigin.Find();
         NPCSpawnCheckBitmask = LayerMask.GetMask("NPC", "Agent");
         SpawnBoundsSize = new Vector3(MapOrigin.NPCSpawnBoundSize, 50f, MapOrigin.NPCSpawnBoundSize);
@@ -149,11 +166,53 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         network.MessagesManager?.RegisterObject(this);
         if (!SimulatorManager.Instance.IsAPI && !network.IsClient)
         {
-            SpawnNPCPool();
+            SpawnNPCPool();//  XZ: delete
             if (NPCActive)
                 SetNPCOnMap();
         }
     }
+
+    private void SUMOInit()
+    {
+        
+        remoteEndPoint = new IPEndPoint(IPAddress.Parse(IP), portRemote);
+        Remote = (EndPoint)(remoteEndPoint);
+
+        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse(IP), portLocal);
+        client = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        client.Bind(ipep);
+        print("SUMO socket Initialed");
+    }
+    private void SendDataToSUMO(string message)
+    {
+        try
+        {
+            byte[] data = Encoding.UTF8.GetBytes(message);
+            client.SendTo(data, data.Length, SocketFlags.None, Remote);
+        }
+        catch (Exception err)
+        {
+            print(err.ToString());
+        }
+    }
+
+
+    private string ReceiveDataFromSUMO()
+    {
+        string recv_text;
+        byte[] data = new byte[20480];
+        int recv = client.ReceiveFrom(data, ref Remote);
+        recv_text = Encoding.UTF8.GetString(data, 0, recv);
+        return recv_text;
+
+    }
+
+
+
+
+
+
+
 
     private void OnDestroy()
     {
@@ -171,15 +230,118 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         {
             DespawnAllNPC();
         }
-
+        string msg = null;
+        bool NPC_enable = false;
         foreach (var npc in CurrentPooledNPCs)
         {
             if (npc.gameObject.activeInHierarchy)
             {
+                NPC_enable = true;
+                msg = msg + npc.name.ToString() + ','
+                   + npc.rb.position.x.ToString() + ','
+                   + npc.rb.transform.position.y.ToString() + ','
+                   + npc.rb.transform.position.z.ToString() + ','
+                   + npc.rb.transform.eulerAngles.y.ToString() + ','
+                   + npc.currentSpeed+ ','
+                   + "Unity" + ',';
+
+                
+                if (msg != null)
+                {
+                    //Debug.Log(Time.time + " Send msg: " + msg);
+                    SendDataToSUMO(msg);
+                }
+                
+               
                 npc.PhysicsUpdate();
             }
+            
         }
+        //recv_text_public = ReceiveDataFromSUMO();
+        //print(recv_text_public);
+        //if (NPC_enable)
+        //{
+        //    SUMOInfoManager(recv_text_public);
+        //}
+       
     }
+
+
+    // XZ: temp function
+    //private void distributer(string info)
+    //{
+    //    string[] veh_info;
+    //    veh_info = info.Split(new string[8] {"{66", "(", ")", "67:", "64:", ":", ",", " " }, StringSplitOptions.RemoveEmptyEntries);
+
+
+    //    bool exist = false;
+    //    for (int i=0; i < CurrentPooledNPCs.Count; i++)
+    //    {
+    //        if (veh_info[0] == CurrentPooledNPCs[i].name && CurrentPooledNPCs[i].ControlledBy == "SUMO")
+    //        {
+    //            exist = true;
+    //            Vector3 Pos = transform.position;
+    //            Pos.x = float.Parse(veh_info[1]);
+    //            Pos.z = float.Parse(veh_info[2]);
+    //            transform.position = Pos;
+    //            Vector3 rot = transform.localEulerAngles;
+    //            rot.y = float.Parse(veh_info[3]);
+    //            transform.localEulerAngles = rot;
+    //            float angle = float.Parse(veh_info[3]) / 360 * 2 * Mathf.PI;
+    //            break;
+    //        }
+    //    }
+
+    //    if (exist == false)
+    //    {
+    //        SpawnNPCPool(info);
+    //    }
+    //}
+
+
+
+
+
+
+
+
+    //private void SUMOInfoManager(string recv_text)
+    //{
+    //    if (recv_text != null)
+    //    {
+    //        //Debug.Log("socket Get: "+ recv_text);
+    //        List<string> veh_IDList = new List<string>();
+    //        string msg_string;
+    //        //Debug.Log(recv_text);
+    //        // Decode and Distrubute information form SUMO
+    //        string[] fragment = recv_text.Split(new string[1] { "\'" }, StringSplitOptions.RemoveEmptyEntries);
+    //        for (int veh = 1; veh <= (fragment.Length - 1) / 2; veh++)
+    //        {
+    //            // Store SUMO spawned vehicle ID
+    //            veh_IDList.Add(fragment[veh * 2 - 1]);
+    //            int start = recv_text.IndexOf("\'" + fragment[veh * 2 - 1] + "\'" + ':') + 4 + fragment[veh * 2 - 1].Length;
+
+    //            if (veh < (fragment.Length - 1) / 2)
+    //            {
+    //                int end = recv_text.IndexOf(", " + "\'" + fragment[veh * 2 + 1] + "\'");
+    //                msg_string = recv_text.Substring(start, end - start - 1);
+
+    //                //print(info_string);
+
+    //            }
+    //            else
+    //            {
+    //                int end = recv_text.IndexOf("}}");
+    //                msg_string = recv_text.Substring(start, end - start);
+
+
+    //            }
+    //            distributer(fragment[veh * 2 - 1] + ", " + msg_string);
+                
+    //        }
+    //    }
+    //}
+
 
     #region npc
     public void ToggleNPC()
@@ -207,6 +369,7 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         NPCController.NPCLabel = GetNPCLabel(npc_name);
         NPCController.id = spawnData.GenId;
         NPCController.GTID = ++SimulatorManager.Instance.GTIDs;
+        NPCController.ControlledBy = "Unity";
         NPCController.Init(spawnData.Seed);
         go.transform.SetPositionAndRotation(spawnData.Position, spawnData.Rotation);
         NPCController.SetLastPosRot(spawnData.Position, spawnData.Rotation);
@@ -222,6 +385,53 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         return NPCController;
     }
 
+    private string SUMOUnitySelection(float penetration_rate)
+    {
+        //string[] info_split;
+        //info_split = info[0].Split(new string[1] { "_" }, StringSplitOptions.RemoveEmptyEntries);
+        //rand = new System.Random(int.Parse(info_split[1])); // seed
+        string ControlledBy;
+        double rand = Random.Range(0.0f, 1.0f);
+        if (rand > penetration_rate)
+        {
+            ControlledBy = "Unity";
+        }
+        else
+        {
+            ControlledBy = "SUMO";
+        }
+        return ControlledBy;
+    }
+
+    //public List<NPCController> SpawnNPCPool(string VehID)
+    //{
+
+    //    var pooledNPCs = new List<NPCController>();
+
+    //    ActiveNPCCount = 0;
+        
+    //    var template = GetWeightedRandomNPC();
+    //    var spawnData = new NPCSpawnData
+    //    {
+    //        Active = false,
+    //        GenId = VehID,//System.Guid.NewGuid().ToString(),
+    //        Template = template,
+    //        Position = Vector3.zero,
+    //        Rotation = Quaternion.identity,
+    //        Color = GetWeightedRandomColor(template.NPCType),
+    //        Seed = NPCSeedGenerator.Next(),
+    //    };
+    //    Debug.Log(spawnData.GenId);
+    //    pooledNPCs.Add(SpawnNPC(spawnData));
+    //    if (Loader.Instance.Network.IsMaster)
+    //        BroadcastMessage(GetSpawnMessage(spawnData));
+        
+    //    return pooledNPCs;
+    //}
+
+
+
+    // XZ: original function
     public List<NPCController> SpawnNPCPool()
     {
         var pooledNPCs = new List<NPCController>();
@@ -238,7 +448,7 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         CurrentPooledNPCs.Clear();
         ActiveNPCCount = 0;
 
-        int poolCount = Mathf.FloorToInt(NPCMaxCount + (NPCMaxCount * 0.1f));
+        int poolCount = 10;//Mathf.FloorToInt(NPCMaxCount + (NPCMaxCount * 0.1f)); // XZ
         for (int i = 0; i < poolCount; i++)
         {
             var template = GetWeightedRandomNPC();
@@ -252,6 +462,7 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
                 Color = GetWeightedRandomColor(template.NPCType),
                 Seed = NPCSeedGenerator.Next(),
             };
+            Debug.Log(spawnData.GenId);
             pooledNPCs.Add(SpawnNPC(spawnData));
             if (Loader.Instance.Network.IsMaster)
                 BroadcastMessage(GetSpawnMessage(spawnData));
@@ -280,12 +491,12 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
             var spawnPos = lane.mapWorldPositions[0];
             CurrentPooledNPCs[i].transform.position = spawnPos;
 
-            if (!WithinSpawnArea(spawnPos))
+            if (!WithinSpawnArea(spawnPos)) // XZ: delete?
             {
                 continue;
             }
 
-            if (!InitSpawn)
+            if (!InitSpawn)// XZ: delete?
             {
                 if (!lane.Spawnable)
                 {
@@ -542,12 +753,15 @@ public class NPCManager : MonoBehaviour, IMessageSender, IMessageReceiver
         message.Content.PushString(data.GenId);
         message.Content.PushEnum<NPCManagerCommandType>((int) NPCManagerCommandType.SpawnNPC);
         message.Type = DistributedMessageType.ReliableOrdered;
+    
         return message;
+        
     }
 
     private void SpawnNPCMock(string vehicleId, NPCS npcData, int npcControllerSeed, Color color, Vector3 position, Quaternion rotation)  // TODO can this use SpawnNPC method?
     {
         var go = new GameObject("NPC " + vehicleId);
+        
         go.SetActive(false);
         go.transform.SetParent(transform);
         go.layer = LayerMask.NameToLayer("NPC");
